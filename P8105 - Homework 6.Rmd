@@ -1,0 +1,133 @@
+---
+title: "P8105 - Homework 6"
+author: "Joe LaRocca"
+date: "2024-11-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(p8105.datasets)
+
+```
+
+## Problem 1
+
+### Upload Weather Data
+
+```{r}
+
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+
+```
+
+### Create Function to Return Log(b_0 * b_1)
+
+```{r}
+
+bootstrap_log = function(lm) {
+  log_b0_b1 = lm |>
+    broom::tidy() |>
+    pull(estimate) |>
+    prod() |>
+    log()
+  return(log_b0_b1)
+}
+
+```
+
+### Create Function to Return R^2 value
+
+```{r}
+
+bootstrap_rsq = function(lm) {
+  r_squared = lm |>
+    broom::glance() |>
+    pull(r.squared)
+  return(r_squared)
+}
+
+```
+
+### Bootstrap 5000 Samples
+
+```{r}
+
+bootstraps_weather = weather_df |>
+  modelr::bootstrap(n = 5000) |>
+  mutate(
+    models = map(strap, \(df) lm(tmax ~ tmin, data = df)),
+    log_b0_b1 = map(models, bootstrap_log),
+    r_sq = map(models, bootstrap_rsq)
+  ) |>
+  select(-strap, -models) |>
+  unnest(log_b0_b1) |>
+  unnest(r_sq)
+  
+```
+
+### Plot the Distribution of log_b0_b1
+
+```{r}
+
+bootstraps_weather |>
+  ggplot(aes(x = log_b0_b1)) + 
+  geom_histogram(fill = "red", col = "black") + 
+  labs(
+    title = "Distribution of Log(b0 + b1) in a Bootstrapped Sample of 5000 SLRs",
+    x = "Log(b0 * b1)",
+    y = "Count"
+  )
+
+```
+
+### Plot the Distribution of r_sq
+
+```{r}
+
+bootstraps_weather |>
+  ggplot(aes(x = r_sq)) + 
+  geom_histogram(fill = "lightblue", col = "black") + 
+    labs(
+    title = "Distribution of R^2 in a Bootstrapped Sample of 5000 SLRs",
+    x = "R^2",
+    y = "Count"
+  )
+
+```
+
+We can see that both of these plots look to have an approximately Normal distribution, i.e. the distributions of $log(b_0 * b_1)$ and $R^2$ are approximately Normal in our sample of 5000 linear models.
+
+### Identifying Quantiles for Confidence Intervals
+
+```{r}
+
+bootstraps_weather |>
+  summarize(
+    ci_lower_log_b0_b1 = quantile(log_b0_b1, 0.025),
+    ci_upper_log_b0_b1 = quantile(log_b0_b1, 0.975),
+    ci_lower_r_sq = quantile(r_sq, 0.025),
+    ci_upper_r_sq = quantile(r_sq, 0.975)
+  ) |>
+  knitr::kable(digits = 3)
+
+```
+
+We can see that the 95\% confidence interval for $log(b_0 * b_1)$ is (1.967, 2.058), while the 95\% confidence interval for $R^2$ is (0.894, 0.927).
+
+## Problem 2
+
+
+
+## Problem 3
