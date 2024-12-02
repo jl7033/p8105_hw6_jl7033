@@ -232,7 +232,11 @@ A few west-coast cities (Albuquerque, Stockton, and Fresno) actually had an odds
 
 ```{r}
 
+birthweight = read_csv("data/birthweight.csv") |>
+  mutate(
+    ppbmi = round(ppbmi, 2)
+  )
 
-
+view(birthweight)
 ```
 
