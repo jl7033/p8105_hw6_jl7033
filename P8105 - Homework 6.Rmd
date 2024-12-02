@@ -9,6 +9,8 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(p8105.datasets)
+library(glmnet)
+library(modelr)
 ```
 
 ## Problem 1
@@ -139,12 +141,12 @@ homicides = read_csv("data/homicide-data.csv") |>
     city_state != "Kansas City, MO",
     city_state != "Tulsa, AL",
     victim_race == "White" | victim_race == "Black",
-    victim_sex == "Male" | victim_sex == "Female"
+    victim_sex == "Male" | victim_sex == "Female",
   ) |> 
   mutate(victim_age = as.numeric(victim_age)) |>
+  drop_na(victim_age) |>
   mutate(unsolved = 
-      disposition == "Closed without arrest" |
-      disposition == "Open/No arrest")
+      disposition == "Closed by arrest")
 
 ```
 
@@ -202,8 +204,6 @@ homicides_ORs = homicides |>
   select(city_state, results) |>
   unnest(results) 
 
-homicides_ORs
-
 ```
 
 ### Make a Plot of Cities by OR
@@ -216,17 +216,16 @@ homicides_ORs |>
   geom_errorbar(aes(ymin = OR_CI_low, ymax = OR_CI_high)) +
   coord_flip() +
   labs(
-    title = "Odds Ratios between Males/Females for Unsolved Homicides Across the U.S.",
+    title = "Odds Ratios between Males/Females for Solved Homicides Across the U.S.",
     x = "City",
-    y = "Estimated Odds Ratio of Homicide Being Unsolved"
+    y = "Estimated Odds Ratio of Homicide Being Solved"
   ) 
-    
 
 ```
 
-From the plot, we can see that generally, homicides with male victims were more likely to be unsolved than those with female victims, since the odds ratios for most cities are greater than 1. The greatest estimated odds ratio, by far, is in New York City, where the estimate is nearly 4. That is, on average, male victims' homicides had nearly four times higher odds of being unsolved than female victims' homicides.
+From the plot, we can see that generally, homicides with male victims were less likely to be solved than those with female victims, since the odds ratios for most cities are less than 1. The lowest estimated odds ratio, by far, is in New York City, where the estimate is just over 0.25. That is, on average, male victims' homicides had about one-quarter the odds of being solved than female victims' homicides.
 
-A few west-coast cities (Albuquerque, Stockton, and Fresno) actually had an odds ratio less than 1, implying that homicides with male victims were **less** likely to be unsolved than those with female victims.
+A few west-coast cities (Albuquerque, Stockton, and Fresno) actually had an odds ratio greater than 1, implying that homicides with male victims were **more** likely to be solved than those with female victims.
 
 ## Problem 3
 
@@ -234,9 +233,110 @@ A few west-coast cities (Albuquerque, Stockton, and Fresno) actually had an odds
 
 birthweight = read_csv("data/birthweight.csv") |>
   mutate(
-    ppbmi = round(ppbmi, 2)
+    ppbmi = round(ppbmi, 2),
+    babysex = as.factor(babysex),
+    malform = as.factor(malform),
+    frace = as.factor(frace),
+    mrace = as.factor(mrace)
   )
 
-view(birthweight)
 ```
+
+### Use LASSO to narrow down the total number of coefficients
+
+```{r}
+
+set.seed(10)
+
+y = birthweight$bwt
+x = birthweight |>
+  select(-bwt) |>
+  data.matrix()
+
+cv_model = cv.glmnet(x, y, alpha = 1)
+lambda_min = cv_model$lambda.min
+
+best_model = glmnet(x, y, alpha = 1, lambda = lambda_min)
+coef(best_model)
+
+```
+
+### Create an OLS model with the predictors chosen by LASSO and Plot Residuals vs. Fitted Values
+
+```{r}
+
+my_model = lm(bwt ~ babysex + bhead + blength + delwt + 
+                                      fincome + frace + gaweeks + menarche + 
+                                      mheight + momage + mrace + parity + 
+                                      smoken + wtgain,
+                                    data = birthweight)
+
+birthweight |> 
+  add_predictions(my_model) |>
+  add_residuals(my_model) |>
+   ggplot(aes(x = pred, y = resid)) +
+  geom_point() + 
+  labs(
+    x = "Fitted Values",
+    y = "Residuals",
+    title = "Residuals vs. Fitted Values Plot for My Model"
+  )
+ 
+
+```
+
+In order to select predictors for my "optimal" model, I used LASSO to select a certain number of predictors, and then created an OLS model with the predictors that LASSO selected.
+
+
+### Find RMSEs and plot them
+
+```{r}
+
+cv_df_bwt = crossv_mc(birthweight, 1000)
+
+cv_df_bwt = 
+  cv_df_bwt |> 
+  mutate(
+    my_model  = map(train, \(df) lm(bwt ~ babysex + bhead + blength + delwt + 
+                                      fincome + frace + gaweeks + menarche + 
+                                      mheight + momage + mrace + parity + 
+                                      smoken + wtgain,
+                                    data = df)),
+    samp_1  = map(train, \(df) lm(bwt ~ blength + gaweeks, data = df)),
+    samp_2  = map(train, \(df) lm(bwt ~ bhead + blength + babysex + 
+                      bhead*blength*babysex, data = df))) |> 
+  mutate(
+    rmse_my_model = map2_dbl(my_model, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_samp_1 = map2_dbl(samp_1, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_samp_2 = map2_dbl(samp_2, test, \(mod, df) rmse(model = mod, data = df)))
+
+cv_df_bwt
+
+```
+
+### Make the Plot
+
+```{r}
+
+cv_df_bwt |>
+  select(starts_with("rmse")) |>
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_"
+  ) |> 
+   mutate(model = fct_inorder(model)) |>
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin() +
+  labs(
+    x = "Model",
+    y = "RMSE",
+    title = "Distribution of RMSE for Birth Weight by Model Choice"
+  )
+
+```
+
+From these violin plots, we can see from the RMSE distributions that the RMSE of "my" model is generally lower than that of either of the two sample models. 
+
 
